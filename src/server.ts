@@ -1,9 +1,17 @@
 import { Server } from "@modelcontextprotocol/sdk";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk";
 import { fooocusService } from "./services/fooocusService";
-import { ensureOutputDirExists, getOutputDir } from "./utils/fileUtils";
+import { 
+  ensureOutputDirExists, 
+  getOutputDir, 
+  saveImageMetadata, 
+  getRecentImages, 
+  getImageMetadata, 
+  openOutputDirectory 
+} from "./utils/fileUtils";
 import logger from "./utils/logger";
 import dotenv from 'dotenv';
+import path from 'path';
 
 // Load environment variables
 dotenv.config();
@@ -185,11 +193,10 @@ server.tool({
           });
           
           // Format results with image URLs and detailed information
-          const results = jobStatus.job_result.map((result: { url: string; seed?: number }, index: number) => {
-            const imageUrl = result.url;
-            const seed = result.seed || "random";
-            const filename = extractFilename(imageUrl);
-            return `Image ${index + 1} (seed: ${seed}):\\n${imageUrl}\\n`;
+          const results = jobStatus.job_result.map((image: { url: string; seed?: number }, index: number) => {
+            const imageUrl = image.url;
+            const imageSeed = image.seed || "random";
+            return `Image ${index + 1} (seed: ${imageSeed}):\\n${imageUrl}\\n`;
           }).join("\\n");
           
           const generationDetails = [
@@ -558,25 +565,24 @@ server.tool({
   }) => {
     try {
       // Get recent images to find the referenced one
-      const images = getRecentImages(50, 'newest');
+      const recentImages = getRecentImages(20, 'newest');
       
-      // Validate image index
-      const index = Math.floor(Number(image_index)) - 1; // Convert to zero-based index
-      if (index < 0 || index >= images.length) {
+      // Get the specified image by index
+      const sourceImage = recentImages[image_index - 1];
+      if (!sourceImage) {
         return {
           content: [
             {
               type: "text",
-              text: `Invalid image index: ${image_index}. Use the browse_images tool to see available images and their indices.`
+              text: `Error: Image with index ${image_index} not found. Please use browse_images tool to see available images.`
             }
           ],
           isError: true
         };
       }
-      
-      // Get the referenced image and its metadata
-      const sourceImage = images[index];
-      const metadata = getImageMetadata(sourceImage.path) || {};
+
+      // Get metadata for the source image
+      const metadata = getImageMetadata(sourceImage.path);
       
       // Use provided parameters or fall back to original image metadata
       const variationPrompt = prompt || metadata.prompt || "A variation of the original image";
@@ -754,7 +760,7 @@ const activeJobs: Set<string> = new Set();
 const MAX_CONCURRENT_JOBS = parseInt(process.env.MAX_CONCURRENT_JOBS || '3', 10);
 
 // Implement proper job queue management and rate limiting
-server.middleware((request, next) => {
+server.middleware((request: any, next: (request: any) => Promise<any>) => {
   // Only rate limit image generation requests
   if (request.type === 'tool_call' && 
      (request.tool_call.name === 'generate_image' || request.tool_call.name === 'generate_variation')) {
@@ -778,11 +784,11 @@ server.middleware((request, next) => {
     activeJobs.add(jobId);
     
     // Process the request
-    return next(request).then(response => {
+    return next(request).then((response: any) => {
       // Remove the job from tracking when done
       activeJobs.delete(jobId);
       return response;
-    }).catch(error => {
+    }).catch((error: any) => {
       // Make sure to remove the job even on error
       activeJobs.delete(jobId);
       throw error;

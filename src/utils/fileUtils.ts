@@ -164,14 +164,14 @@ export function openOutputDirectory(): Promise<string> {
     
     // Execute the command
     const { spawn } = require('child_process');
-    const process = spawn(command, args);
+    const childProcess = spawn(command, args);
     
-    process.on('error', (error: Error) => {
+    childProcess.on('error', (error: Error) => {
       console.error('Error opening output directory:', error);
       reject(`Failed to open directory: ${error.message}`);
     });
     
-    process.on('close', (code: number) => {
+    childProcess.on('close', (code: number) => {
       if (code === 0) {
         resolve(`Successfully opened output directory: ${OUTPUT_DIR}`);
       } else {
