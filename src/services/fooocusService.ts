@@ -196,25 +196,100 @@ class FooocusService {
     // Ensure API is running
     await this.startApi();
     
-    const response = await axios.post(
-      `${FOOOCUS_API_URL}/v1/generation/text-to-image`,
-      params,
-      { headers: { 'Content-Type': 'application/json' } }
-    );
-    
-    return response.data;
+    try {
+      // Get timeout from environment variables or use default
+      const apiTimeout = parseInt(process.env.FOOOCUS_API_TIMEOUT || '30000', 10);
+      
+      const response = await axios.post(
+        `${FOOOCUS_API_URL}/v1/generation/text-to-image`,
+        params,
+        { 
+          headers: { 'Content-Type': 'application/json' },
+          timeout: apiTimeout
+        }
+      );
+      
+      return response.data;
+    } catch (error) {
+      // Log the full error for debugging
+      console.error('Error in generateImage API call:', error);
+      
+      // Check if API is down and try to restart it
+      if (axios.isAxiosError(error) && (error.code === 'ECONNREFUSED' || error.code === 'ECONNABORTED')) {
+        console.log('Connection to Fooocus API failed, attempting to restart...');
+        
+        try {
+          // Kill any existing processes and start fresh
+          await this.stopApi();
+          await new Promise(resolve => setTimeout(resolve, 2000)); // Wait before restarting
+          await this.startApi();
+          
+          // Retry the request once
+          console.log('Retrying image generation request after API restart...');
+          const retryResponse = await axios.post(
+            `${FOOOCUS_API_URL}/v1/generation/text-to-image`,
+            params,
+            { headers: { 'Content-Type': 'application/json' } }
+          );
+          
+          return retryResponse.data;
+        } catch (retryError) {
+          console.error('Failed to restart API and retry request:', retryError);
+          throw new Error('Failed to connect to Fooocus API, even after restart attempt');
+        }
+      }
+      
+      // Format user-friendly error message
+      let errorMessage = 'Unknown error occurred while generating image';
+      if (axios.isAxiosError(error)) {
+        if (error.response) {
+          // Server responded with error status code
+          errorMessage = `API error (${error.response.status}): ${error.response.data?.message || error.message}`;
+        } else if (error.request) {
+          // Request was made but no response received
+          errorMessage = 'No response from Fooocus API - check if the server is running';
+        } else {
+          // Error setting up the request
+          errorMessage = `Request error: ${error.message}`;
+        }
+      } else if (error instanceof Error) {
+        errorMessage = error.message;
+      }
+      
+      throw new Error(errorMessage);
+    }
   }
 
   /**
    * Check the status of an image generation job
    */
   async checkJobStatus(jobId: string): Promise<JobStatusResponse> {
-    const response = await axios.get(
-      `${FOOOCUS_API_URL}/v1/generation/query-job`,
-      { params: { job_id: jobId } }
-    );
-    
-    return response.data;
+    try {
+      // Get timeout from environment variables or use default
+      const apiTimeout = parseInt(process.env.FOOOCUS_API_TIMEOUT || '30000', 10);
+      
+      const response = await axios.get(
+        `${FOOOCUS_API_URL}/v1/generation/query-job`,
+        { 
+          params: { job_id: jobId },
+          timeout: apiTimeout
+        }
+      );
+      
+      return response.data;
+    } catch (error) {
+      console.error('Error checking job status:', error);
+      
+      // Return a formatted error response instead of throwing
+      // This allows the polling loop to continue rather than crashing
+      return {
+        job_stage: "ERROR",
+        job_status: "Error checking job status",
+        job_error: axios.isAxiosError(error) 
+          ? `API error: ${error.message}`
+          : `Unknown error: ${error instanceof Error ? error.message : String(error)}`
+      };
+    }
   }
 }
 

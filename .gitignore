@@ -62,6 +62,8 @@ fooocus_api.pid
 *.secret
 *.key
 *personal*
+Fooocus MCP Integration: Lessons Learned.md
+CLAUDE.md
 
 # Cache and local files
 .cache/

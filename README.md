@@ -14,8 +14,19 @@ This is a Model Context Protocol (MCP) server that enables local image generatio
 
 - [Node.js](https://nodejs.org/) (v16 or later)
 - [TypeScript](https://www.typescriptlang.org/)
+- [Python](https://www.python.org/) (3.10 or later - required for Fooocus)
 - [Fooocus](https://github.com/lllyasviel/Fooocus) (with API enabled)
 - [Fooocus-API](https://github.com/mrhan1993/Fooocus-API)
+
+### System Requirements
+
+Fooocus requires significant computational resources for image generation:
+
+- **GPU**: NVIDIA GPU with at least 4GB VRAM (8GB+ recommended)
+- **CPU**: Modern multi-core processor (for non-GPU operations)
+- **RAM**: Minimum 16GB, 32GB recommended
+- **Disk Space**: 15GB+ for model files plus storage for generated images
+- **Operating System**: Linux or macOS recommended (Windows support through shell compatibility layer)
 
 ### Setting Up Fooocus and Fooocus-API
 
@@ -23,14 +34,41 @@ This is a Model Context Protocol (MCP) server that enables local image generatio
    ```bash
    git clone https://github.com/lllyasviel/Fooocus.git
    cd Fooocus
-   # Follow the installation instructions in the Fooocus README
+   python -m venv venv
+   
+   # Activate the virtual environment
+   # On Linux/macOS:
+   source venv/bin/activate
+   # On Windows:
+   # venv\Scripts\activate
+   
+   # Install dependencies
+   pip install -r requirements.txt
+   # Download the models (this may take some time)
+   python download_models.py
    ```
 
 2. Download and set up Fooocus-API:
    ```bash
    git clone https://github.com/mrhan1993/Fooocus-API.git
    cd Fooocus-API
-   # Place this directory alongside your Fooocus installation
+   
+   # Create a virtual environment using the same Python version
+   python -m venv venv
+   
+   # Activate the virtual environment
+   # On Linux/macOS:
+   source venv/bin/activate
+   # On Windows:
+   # venv\Scripts\activate
+   
+   # Install dependencies
+   pip install -r requirements.txt
+   ```
+
+3. Make the shell scripts executable:
+   ```bash
+   chmod +x *.sh
    ```
 
 ## Installation
@@ -38,7 +76,7 @@ This is a Model Context Protocol (MCP) server that enables local image generatio
 1. Clone this repository:
 
 ```bash
-git clone https://github.com/yourusername/localviz-mcp.git
+git clone https://github.com/jamesking/localviz-mcp.git
 cd localviz-mcp
 ```
 
@@ -159,20 +197,39 @@ The MCP server provides the following tools:
    - Parameters:
      - `prompt`: Text description of the desired image
      - `negative_prompt`: What to avoid in the image
-     - `style_selections`: Array of style presets
-     - `image_number`: Number of images to generate
+     - `style`: Style preset to use for generation (e.g., 'Fooocus V2', 'Cinematic')
+     - `num_images`: Number of images to generate
+     - `seed`: Specific seed for reproducible generation (use -1 for random)
+     - `aspect_ratio`: Aspect ratio for generated images (e.g., 'square', 'portrait', 'landscape', or specific dimensions like '1024*1024')
 
-2. `list_styles`: List all available style presets
+2. `browse_images`: Browse and list recently generated images
+   - Parameters:
+     - `limit`: Maximum number of images to return (default: 10)
+     - `sort_by`: Sort order ('newest' or 'oldest')
+     - `open_folder`: Whether to open the output folder in your file explorer (default: true)
 
-3. `start_api_server`: Start the Fooocus API server
-   - Parameters: None
+3. `generate_variation`: Create variations of existing images
+   - Parameters:
+     - `image_index`: Index of the image to use as reference (from browse_images)
+     - `prompt`: New prompt to modify the image (optional, will use original if not provided)
+     - `negative_prompt`: Elements to avoid in the generated image
+     - `num_images`: Number of variations to generate
+     - `seed`: Specific seed for reproducible generation
+     - `aspect_ratio`: Aspect ratio for generated images
 
-4. `stop_api_server`: Stop the Fooocus API server
-   - Parameters: None
+4. `list_styles`: List all available style presets
+
+5. `manage_fooocus_server`: Manage the Fooocus API server
+   - Parameters:
+     - `action`: "start" or "stop"
+
+6. `server_status`: Get information about the LocalViz MCP server
+   - Provides statistics, configuration, and runtime information
+   - No parameters required
 
 ## Examples
 
-### Generating an Image
+### Generating a Basic Image
 
 ```
 Use LocalViz to create an image of a futuristic cityscape with flying cars in the style of cinematic photography
@@ -181,20 +238,97 @@ Use LocalViz to create an image of a futuristic cityscape with flying cars in th
 ### Generating Multiple Images with a Specific Style
 
 ```
-Use LocalViz to generate 4 images of a peaceful garden with Japanese styling using the "Watercolor" style preset
+Use LocalViz to generate 4 images of a peaceful garden with Japanese styling using the "Watercolor" style
 ```
 
 ### Using Negative Prompts
 
 ```
-Use LocalViz to create an image of a mountain landscape with snow-capped peaks, no people, no text
+Use LocalViz to create an image of a mountain landscape with snow-capped peaks, negative prompt: people, text, watermarks
+```
+
+### Specifying Aspect Ratio
+
+```
+Use LocalViz to create a portrait oriented image of a business professional in a modern office setting
+```
+
+### Using a Specific Seed for Reproducibility
+
+```
+Use LocalViz to create an image of a tropical beach at sunset with seed 42
+```
+
+### Combining Multiple Parameters
+
+```
+Use LocalViz to generate 2 square images of a fantasy dragon with colorful scales, style Oil Painting, negative prompt: blurry, low quality
+```
+
+### Browsing Recently Generated Images
+
+```
+Use LocalViz to browse recently generated images
+```
+
+### Creating Variations of an Existing Image
+
+```
+Use LocalViz to browse recently generated images, then generate a variation of image 1 with the prompt "make it more vibrant and colorful"
+```
+
+### Image Browsing with Filters
+
+```
+Use LocalViz to browse the 5 oldest generated images
+```
+
+### Getting Server Status Information
+
+```
+Use LocalViz to show server status
 ```
 
 ## Troubleshooting
 
-- **Server won't start**: Check that the paths in your `.env` file are correct
-- **Images not generating**: Ensure the Fooocus API server is running
-- **Claude doesn't recognize commands**: Verify your Claude Desktop configuration
+### Common Issues
+
+- **Server won't start**: 
+  - Check that the paths in your `.env` file are correct
+  - Ensure Node.js is properly installed (v16+)
+  - Verify typescript is installed globally or locally
+  - Check that the build process completed successfully
+
+- **Images not generating**: 
+  - Ensure the Fooocus API server is running (`./start_fooocus_api.sh`)
+  - Check that your GPU has enough VRAM available
+  - Verify Python dependencies are correctly installed
+  - Look at the Fooocus API console for specific errors
+  - Try using the `manage_fooocus_server` tool with "start" parameter
+
+- **Claude doesn't recognize commands**: 
+  - Verify your Claude Desktop configuration
+  - Check that the MCP server is running
+  - Ensure the path to server.js is correct in claude_desktop_config.json
+  - Restart Claude Desktop after configuration changes
+
+- **Python environment issues**:
+  - Ensure you have Python 3.10+ installed
+  - Check that virtual environments are set up properly
+  - Verify all dependencies are installed in the correct environment
+
+- **Permission denied errors**:
+  - Make sure shell scripts are executable: `chmod +x *.sh`
+  - Check file permissions on output directory
+
+### Debugging Tips
+
+- Check the server logs in the `logs` directory (`logs/localviz-*.log`)
+- For test runs, check `server.log` for information
+- Monitor the Fooocus API process for errors
+- Set environment variable `LOG_LEVEL=debug` in `.env` for more verbose logging
+- View server statistics with the `server_status` tool
+- For CUDA errors, check GPU compatibility and driver versions
 
 ## Contributing
 
