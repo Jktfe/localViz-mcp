@@ -1,5 +1,6 @@
-import fs from 'fs';
-import path from 'path';
+import * as fs from 'fs/promises';
+import * as fsSync from 'fs';
+import * as path from 'path';
 import { fileURLToPath } from 'url';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -12,9 +13,11 @@ const OUTPUT_DIR = process.env.OUTPUT_DIR || path.join(projectRoot, 'outputs');
 /**
  * Ensures the output directory exists, creating it if necessary
  */
-export function ensureOutputDirExists(): void {
-  if (!fs.existsSync(OUTPUT_DIR)) {
-    fs.mkdirSync(OUTPUT_DIR, { recursive: true });
+export async function ensureOutputDirExists(): Promise<void> {
+  try {
+    await fs.access(OUTPUT_DIR);
+  } catch {
+    await fs.mkdir(OUTPUT_DIR, { recursive: true });
     console.log(`Created output directory: ${OUTPUT_DIR}`);
   }
 }
@@ -36,16 +39,23 @@ export function getOutputDir(): string {
 /**
  * Check if a file exists at the provided path
  */
-export function fileExists(filePath: string): boolean {
-  return fs.existsSync(filePath);
+export async function fileExists(filePath: string): Promise<boolean> {
+  try {
+    await fs.access(filePath);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 /**
  * Create directory if it doesn't exist
  */
-export function ensureDirExists(dirPath: string): void {
-  if (!fs.existsSync(dirPath)) {
-    fs.mkdirSync(dirPath, { recursive: true });
+export async function ensureDirExists(dirPath: string): Promise<void> {
+  try {
+    await fs.access(dirPath);
+  } catch {
+    await fs.mkdir(dirPath, { recursive: true });
   }
 }
 
@@ -55,14 +65,16 @@ export function ensureDirExists(dirPath: string): void {
  * @param sortBy Sort order ('newest' or 'oldest')
  * @returns Array of image file objects with path and stats
  */
-export function getRecentImages(limit = 20, sortBy = 'newest'): Array<{path: string, url: string, stats: fs.Stats}> {
+export async function getRecentImages(limit = 20, sortBy = 'newest'): Promise<Array<{path: string, url: string, stats: fsSync.Stats}>> {
   try {
-    if (!fs.existsSync(OUTPUT_DIR)) {
+    try {
+      await fs.access(OUTPUT_DIR);
+    } catch {
       return [];
     }
     
     // Read all files in the output directory
-    const files = fs.readdirSync(OUTPUT_DIR);
+    const files = await fs.readdir(OUTPUT_DIR);
     
     // Filter for image files only (png, jpg, jpeg, webp)
     const imageFiles = files.filter(file => {
@@ -71,13 +83,13 @@ export function getRecentImages(limit = 20, sortBy = 'newest'): Array<{path: str
     });
     
     // Get stats for each file for sorting by date
-    const imageFilesWithStats = imageFiles.map(file => {
+    const imageFilesWithStats = await Promise.all(imageFiles.map(async file => {
       const filePath = path.join(OUTPUT_DIR, file);
-      const stats = fs.statSync(filePath);
+      const stats = await fs.stat(filePath);
       // Create a URL that can be accessed by the client
       const url = `file://${filePath}`;
       return { path: filePath, url, stats };
-    });
+    }));
     
     // Sort by modification time (newest or oldest first)
     imageFilesWithStats.sort((a, b) => {
@@ -100,10 +112,10 @@ export function getRecentImages(limit = 20, sortBy = 'newest'): Array<{path: str
  * @param filename Base filename for the image
  * @param metadata Generation metadata
  */
-export function saveImageMetadata(filename: string, metadata: any): void {
+export async function saveImageMetadata(filename: string, metadata: any): Promise<void> {
   try {
     const metaFilePath = path.join(OUTPUT_DIR, `${path.basename(filename, path.extname(filename))}.json`);
-    fs.writeFileSync(metaFilePath, JSON.stringify(metadata, null, 2));
+    await fs.writeFile(metaFilePath, JSON.stringify(metadata, null, 2));
   } catch (error) {
     console.error('Error saving image metadata:', error);
   }
@@ -114,18 +126,20 @@ export function saveImageMetadata(filename: string, metadata: any): void {
  * @param imagePath Path to the image file
  * @returns Metadata object or null if not found
  */
-export function getImageMetadata(imagePath: string): any {
+export async function getImageMetadata(imagePath: string): Promise<any> {
   try {
     const metaFilePath = path.join(
       path.dirname(imagePath),
       `${path.basename(imagePath, path.extname(imagePath))}.json`
     );
     
-    if (fs.existsSync(metaFilePath)) {
-      const data = fs.readFileSync(metaFilePath, 'utf8');
+    try {
+      await fs.access(metaFilePath);
+      const data = await fs.readFile(metaFilePath, 'utf8');
       return JSON.parse(data);
+    } catch {
+      return null;
     }
-    return null;
   } catch (error) {
     console.error('Error reading image metadata:', error);
     return null;
@@ -136,10 +150,10 @@ export function getImageMetadata(imagePath: string): any {
  * Open the output directory in the default file explorer
  * @returns Success message or error
  */
-export function openOutputDirectory(): Promise<string> {
-  return new Promise((resolve, reject) => {
+export async function openOutputDirectory(): Promise<string> {
+  return new Promise(async (resolve, reject) => {
     // Make sure the directory exists
-    ensureOutputDirExists();
+    await ensureOutputDirExists();
     
     // Determine the command based on the platform
     let command: string;

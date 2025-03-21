@@ -1,61 +1,75 @@
-// Import dependencies
-import { dirname } from 'path';
-import { fileURLToPath } from 'url';
+// Direct import from the SDK's CJS directory
+const { McpServer } = require('./node_modules/@modelcontextprotocol/sdk/dist/cjs/server/mcp.js');
+const { StdioServerTransport } = require('./node_modules/@modelcontextprotocol/sdk/dist/cjs/server/stdio.js');
+console.log("McpServer class methods:", Object.getOwnPropertyNames(McpServer.prototype));
+console.log("StdioServerTransport class methods:", Object.getOwnPropertyNames(StdioServerTransport.prototype));
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = dirname(__filename);
-
-// Import other dependencies
-import { fooocusService } from "./services/fooocusService.js";
-import { 
-  ensureOutputDirExists, 
-  getOutputDir, 
-  saveImageMetadata, 
-  getRecentImages, 
-  getImageMetadata, 
-  openOutputDirectory 
-} from "./utils/fileUtils.js";
-import logger from "./utils/logger.js";
-import dotenv from 'dotenv';
-import path from 'path';
+const fs = require('fs');
+const path = require('path');
+const axios = require('axios');
+const dotenv = require('dotenv');
 
 // Load environment variables
 dotenv.config();
 
-// Define types for tool parameters
-type GenerateImageParams = {
-  prompt: string;
-  negative_prompt?: string;
-  style?: string;
-  num_images?: number;
-  seed?: number;
-  aspect_ratio?: string;
+// Set default paths if not specified in environment variables
+const FOOOCUS_API_URL = process.env.FOOOCUS_API_URL || 'http://127.0.0.1:8888';
+const OUTPUT_DIR = process.env.OUTPUT_DIR || path.resolve(process.cwd(), '../New Model Dropbox/James King/Air - JK Work/imageGens');
+
+// Ensure output directory exists
+function ensureOutputDirExists() {
+  if (!fs.existsSync(OUTPUT_DIR)) {
+    fs.mkdirSync(OUTPUT_DIR, { recursive: true });
+  }
+  return OUTPUT_DIR;
+}
+
+// Utility for saving image metadata
+function saveImageMetadata(filename, metadata) {
+  const metadataPath = path.join(OUTPUT_DIR, `${filename}.json`);
+  fs.writeFileSync(metadataPath, JSON.stringify(metadata, null, 2));
+}
+
+// Fooocus service implementation
+const fooocusService = {
+  async isApiUp() {
+    try {
+      const response = await axios.get(`${FOOOCUS_API_URL}/v1/status`, { timeout: 2000 });
+      return response.status === 200;
+    } catch (error) {
+      return false;
+    }
+  },
+
+  async generateImage(params) {
+    try {
+      const response = await axios.post(`${FOOOCUS_API_URL}/v1/generation/text-to-image`, params);
+      return response.data;
+    } catch (error) {
+      console.error("Error generating image:", error);
+      throw error;
+    }
+  },
+
+  async checkJobStatus(jobId) {
+    try {
+      const response = await axios.get(`${FOOOCUS_API_URL}/v1/generation/job/${jobId}`);
+      return response.data;
+    } catch (error) {
+      console.error("Error checking job status:", error);
+      throw error;
+    }
+  }
 };
 
-type JobResult = {
-  url: string;
-  seed?: number;
-};
-
-// The SDK will be imported by the CommonJS wrapper
-
-// Main async function to allow top-level await
+// Start server
 async function startServer() {
   try {
     // Ensure output directory exists
-    await ensureOutputDirExists();
-    
-    // Get the pre-loaded Server and StdioServerTransport from global scope
-    // Added by the wrapper.cjs script
-    const Server = globalThis.SERVER_CLASS;
-    const StdioServerTransport = globalThis.STDIO_TRANSPORT_CLASS;
-    
-    if (!Server || !StdioServerTransport) {
-      throw new Error('MCP SDK not loaded properly. Make sure to run this through the wrapper.cjs script.');
-    }
+    ensureOutputDirExists();
     
     // Create an MCP server
-    const server = new Server({
+    const server = new McpServer({
       name: "localviz",
       description: "Generate images locally using Fooocus",
       version: "1.0.0",
@@ -104,7 +118,7 @@ async function startServer() {
           required: false
         }
       ],
-      execute: async ({ prompt, negative_prompt, style, num_images, seed, aspect_ratio }: GenerateImageParams) => {
+      execute: async ({ prompt, negative_prompt, style, num_images, seed, aspect_ratio }) => {
         try {
           // Default values
           const styleSelections = style ? [style] : ["Fooocus V2"];
@@ -115,7 +129,7 @@ async function startServer() {
           // Map aspect ratio strings to resolution values
           let aspectRatioSelection = "1152*896"; // Default resolution
           if (aspect_ratio) {
-            const aspectRatioMap: Record<string, string> = {
+            const aspectRatioMap = {
               "square": "1024*1024",
               "portrait": "896*1152",
               "landscape": "1152*896",
@@ -131,6 +145,20 @@ async function startServer() {
           console.log(`Generating ${imageNumber} images with prompt: "${prompt}" using aspect ratio: ${aspectRatioSelection}`);
           if (imageSeed !== -1) {
             console.log(`Using specified seed: ${imageSeed}`);
+          }
+          
+          // Check if Fooocus API is running
+          const isApiRunning = await fooocusService.isApiUp();
+          if (!isApiRunning) {
+            return {
+              content: [
+                {
+                  type: "text",
+                  text: "The Fooocus API is not running. Please start the Fooocus API server first."
+                }
+              ],
+              isError: true
+            };
           }
           
           // Generate image through Fooocus API
@@ -195,7 +223,7 @@ async function startServer() {
             // Check if job completed successfully
             if (jobStatus.job_stage === "COMPLETED" && jobStatus.job_result && jobStatus.job_result.length > 0) {
               // Extract the actual filename from the URL for a cleaner display
-              const extractFilename = (url: string): string => {
+              const extractFilename = (url) => {
                 try {
                   const parsedUrl = new URL(url);
                   const pathSegments = parsedUrl.pathname.split('/');
@@ -209,7 +237,7 @@ async function startServer() {
               // Save metadata for each generated image
               for (const result of jobStatus.job_result) {
                 const filename = extractFilename(result.url);
-                await saveImageMetadata(filename, {
+                saveImageMetadata(filename, {
                   prompt: prompt,
                   negative_prompt: negPrompt,
                   seed: result.seed,
@@ -221,7 +249,7 @@ async function startServer() {
               }
               
               // Format results with image URLs and detailed information
-              const results = jobStatus.job_result.map((image: JobResult, index: number) => {
+              const results = jobStatus.job_result.map((image, index) => {
                 const imageUrl = image.url;
                 const imageSeed = image.seed || "random";
                 return `Image ${index + 1} (seed: ${imageSeed}):\\n${imageUrl}\\n`;
@@ -232,7 +260,7 @@ async function startServer() {
                 negPrompt ? `Negative prompt: "${negPrompt}"` : null,
                 `Style: ${styleSelections.join(', ')}`,
                 `Aspect ratio: ${aspectRatioSelection}`,
-                `Images saved to: ${await getOutputDir()}`
+                `Images saved to: ${OUTPUT_DIR}`
               ].filter(Boolean).join('\\n');
               
               return {
@@ -262,19 +290,18 @@ async function startServer() {
             content: [
               {
                 type: "text",
-                text: "There was a problem with the image generation process. The Fooocus API may have failed to respond properly.\n\nTroubleshooting steps:\n1. Check if the Fooocus API is running using the manage_fooocus_server tool\n2. Verify the Fooocus installation is working correctly\n3. Check server logs for more detailed error information\n4. Try again with a simpler prompt"
+                text: "There was a problem with the image generation process. The Fooocus API may have failed to respond properly.\n\nTroubleshooting steps:\n1. Check if the Fooocus API is running\n2. Verify the Fooocus installation is working correctly\n3. Check server logs for more detailed error information\n4. Try again with a simpler prompt"
               }
             ],
             isError: true
           };
-        } catch (error: unknown) {
+        } catch (error) {
           console.error("Error in generate_image tool:", error);
-          const errorMessage = error instanceof Error ? error.message : String(error);
           return {
             content: [
               {
                 type: "text",
-                text: `Error generating image: ${errorMessage}\n\nTroubleshooting steps:\n1. Check if the Fooocus API is running\n2. Verify the API URL is correct\n3. Check system resources (memory, disk space)\n4. Try with a simpler prompt or different parameters`
+                text: `Error generating image: ${error.message || String(error)}\n\nTroubleshooting steps:\n1. Check if the Fooocus API is running\n2. Verify the API URL is correct\n3. Check system resources (memory, disk space)\n4. Try with a simpler prompt or different parameters`
               }
             ],
             isError: true
@@ -298,7 +325,7 @@ async function startServer() {
     
     🌟 Starting LocalViz MCP server for local image generation
     🔧 Configuration:
-       • Images will be saved to: ${await getOutputDir()}
+       • Images will be saved to: ${OUTPUT_DIR}
        • API URL: ${process.env.FOOOCUS_API_URL || 'http://127.0.0.1:8888'}
        • Max concurrent jobs: ${MAX_CONCURRENT_JOBS}
        • Log level: ${process.env.LOG_LEVEL || 'info'}
@@ -309,8 +336,8 @@ async function startServer() {
     console.log(startupBanner);
     
     // Start the server
-    await server.listen();
-  } catch (error: unknown) {
+    await server.connect();
+  } catch (error) {
     console.error("Failed to start LocalViz server:", error);
     process.exit(1);
   }

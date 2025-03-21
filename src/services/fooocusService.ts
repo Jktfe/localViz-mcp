@@ -1,8 +1,9 @@
 import axios from 'axios';
-import { JobStatusResponse, TextToImageParams, TextToImageResponse } from '../interfaces/fooocus';
+import { JobStatusResponse, TextToImageParams, TextToImageResponse } from '../interfaces/fooocus.js';
 import { execFile, spawn, ChildProcess } from 'child_process';
 import path from 'path';
-import fs from 'fs';
+import * as fs from 'fs/promises';
+import * as fsSync from 'fs';
 import { fileURLToPath } from 'url';
 import dotenv from 'dotenv';
 
@@ -26,9 +27,13 @@ class FooocusService {
   private apiStartingPromise: Promise<void> | null = null;
 
   constructor() {
-    // Create output directory if it doesn't exist
-    if (!fs.existsSync(OUTPUT_DIR)) {
-      fs.mkdirSync(OUTPUT_DIR, { recursive: true });
+    // Create output directory if it doesn't exist - do this synchronously during initialization
+    this.initOutputDir();
+  }
+
+  private initOutputDir(): void {
+    if (!fsSync.existsSync(OUTPUT_DIR)) {
+      fsSync.mkdirSync(OUTPUT_DIR, { recursive: true });
     }
   }
 

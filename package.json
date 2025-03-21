@@ -3,11 +3,10 @@
   "version": "1.0.0",
   "description": "MCP server for local image generation using Fooocus",
   "main": "server.js",
-  "type": "module",
   "scripts": {
     "build": "tsc",
-    "start": "node dist/server.js",
-    "dev": "ts-node-esm src/server.ts"
+    "start": "node server.cjs",
+    "dev": "ts-node src/server.ts"
   },
   "keywords": [
     "mcp",
@@ -18,12 +17,13 @@
   "license": "MIT",
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.7.0",
-    "dotenv": "^16.4.3",
-    "axios": "^1.6.7"
+    "axios": "^1.8.4",
+    "dotenv": "^16.4.7",
+    "uuid": "^11.1.0"
   },
   "devDependencies": {
-    "typescript": "^5.3.3",
     "@types/node": "^20.11.19",
-    "ts-node": "^10.9.2"
+    "ts-node": "^10.9.2",
+    "typescript": "^5.3.3"
   }
 }

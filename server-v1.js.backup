@@ -1,0 +1,961 @@
+#!/usr/bin/env node
+/**
+ * LocalViz MCP Server - V1
+ * Provides local image generation capabilities using Fooocus API
+ */
+
+// Import SDK components directly from node_modules
+const { McpServer } = require('./node_modules/@modelcontextprotocol/sdk/dist/cjs/server/mcp.js');
+const { StdioServerTransport } = require('./node_modules/@modelcontextprotocol/sdk/dist/cjs/server/stdio.js');
+
+// Import required libraries
+const fs = require('fs');
+const path = require('path');
+const axios = require('axios');
+const dotenv = require('dotenv');
+const { promisify } = require('util');
+const mkdirAsync = promisify(fs.mkdir);
+const writeFileAsync = promisify(fs.writeFile);
+const accessAsync = promisify(fs.access);
+const { spawn, exec } = require('child_process');
+
+// Load environment variables
+dotenv.config();
+
+// Helper to get log level number
+function getLogLevel() {
+  const level = (CONFIG ? CONFIG.LOG_LEVEL : process.env.LOG_LEVEL) || 'info';
+  const levels = { debug: 0, info: 1, warn: 2, error: 3 };
+  return levels[level.toLowerCase()] || 1;
+}
+
+// Configure logging
+const logger = {
+  debug: (...args) => { if (getLogLevel() <= 0) console.log(`[${new Date().toISOString()}] [DEBUG]`, ...args); },
+  info:  (...args) => { if (getLogLevel() <= 1) console.log(`[${new Date().toISOString()}] [INFO]`, ...args); },
+  warn:  (...args) => { if (getLogLevel() <= 2) console.log(`[${new Date().toISOString()}] [WARN]`, ...args); },
+  error: (...args) => { if (getLogLevel() <= 3) console.log(`[${new Date().toISOString()}] [ERROR]`, ...args); },
+};
+
+// Helper to clean environment variables with quotes
+const cleanEnv = (value) => {
+  if (!value) return value;
+  // Remove quotes if present
+  return value.replace(/^["'](.*)["']$/, '$1');
+};
+
+// Configuration
+const CONFIG = {
+  // API settings
+  FOOOCUS_API_URL: process.env.FOOOCUS_API_URL || 'http://127.0.0.1:8888',
+  API_TIMEOUT: parseInt(process.env.API_TIMEOUT || '10000', 10),
+  POLLING_INTERVAL: parseInt(process.env.POLLING_INTERVAL || '2000', 10),
+  
+  // Fooocus paths
+  FOOOCUS_API_PATH: cleanEnv(process.env.FOOOCUS_API_PATH) || '',
+  FOOOCUS_PATH: cleanEnv(process.env.FOOOCUS_PATH) || '',
+  
+  // Output settings
+  OUTPUT_DIR: cleanEnv(process.env.OUTPUT_DIR) || path.resolve(process.cwd(), 'outputs'),
+  CREATE_SUBDIRS: process.env.CREATE_SUBDIRS === 'true',
+  
+  // Processing settings
+  MAX_CONCURRENT_JOBS: parseInt(process.env.MAX_CONCURRENT_JOBS || '3', 10),
+  
+  // Logging
+  LOG_LEVEL: process.env.LOG_LEVEL || 'info',
+  LOG_FILE: process.env.LOG_FILE || path.join(process.cwd(), 'localviz.log'),
+  
+  // API Management
+  MANAGE_API: process.env.MANAGE_API !== 'false', // Default to true
+  API_SHUTDOWN_TIMEOUT: parseInt(process.env.API_SHUTDOWN_TIMEOUT || '300000', 10), // 5 minutes by default
+};
+
+// Log starting configuration
+logger.debug('Starting with configuration:');
+Object.entries(CONFIG).forEach(([key, value]) => {
+  logger.debug(`  ${key}: ${value}`);
+});
+
+// Verify critical paths exist
+const verifyPaths = async () => {
+  logger.info('Verifying configured paths:');
+  
+  // Check output directory
+  try {
+    await accessAsync(CONFIG.OUTPUT_DIR, fs.constants.R_OK | fs.constants.W_OK);
+    logger.info(`✅ Output directory exists and is writable: ${CONFIG.OUTPUT_DIR}`);
+  } catch (error) {
+    logger.warn(`⚠️ Issue with output directory: ${CONFIG.OUTPUT_DIR}`);
+    logger.warn(`   Error: ${error.message}`);
+    try {
+      logger.info('Attempting to create output directory...');
+      await mkdirAsync(CONFIG.OUTPUT_DIR, { recursive: true });
+      logger.info('✅ Output directory created successfully');
+    } catch (createError) {
+      logger.error(`❌ Failed to create output directory: ${createError.message}`);
+    }
+  }
+  
+  // Check Fooocus API Path if API management is enabled
+  if (CONFIG.MANAGE_API) {
+    if (!CONFIG.FOOOCUS_API_PATH) {
+      logger.warn('⚠️ FOOOCUS_API_PATH not configured but API management is enabled');
+    } else {
+      try {
+        await accessAsync(CONFIG.FOOOCUS_API_PATH, fs.constants.R_OK);
+        logger.info(`✅ Fooocus API path exists: ${CONFIG.FOOOCUS_API_PATH}`);
+        
+        // Check for run_api.sh
+        try {
+          await accessAsync(path.join(CONFIG.FOOOCUS_API_PATH, 'run_api.sh'), fs.constants.X_OK);
+          logger.info('✅ run_api.sh script found and is executable');
+        }); catch (err) {
+          logger.error(`❌ run_api.sh script not found or not executable in ${CONFIG.FOOOCUS_API_PATH}`);
+        });
+      }); catch (error) {
+        logger.error(`❌ Fooocus API path does not exist or is not accessible: ${CONFIG.FOOOCUS_API_PATH}`);
+      });
+    }
+    
+    if (!CONFIG.FOOOCUS_PATH) {
+      logger.warn('⚠️ FOOOCUS_PATH not configured but API management is enabled');
+    } else {
+      try {
+        await accessAsync(CONFIG.FOOOCUS_PATH, fs.constants.R_OK);
+        logger.info(`✅ Fooocus path exists: ${CONFIG.FOOOCUS_PATH}`);
+      }); catch (error) {
+        logger.error(`❌ Fooocus path does not exist or is not accessible: ${CONFIG.FOOOCUS_PATH}`);
+      });
+    }
+  }
+};
+
+/**
+ * Logging utility
+ */
+class Logger {
+  constructor(level = 'info', logFile = null) {
+    this.level = level;
+    this.logFile = logFile;
+    this.levels = {
+      error: 0,
+      warn: 1,
+      info: 2,
+      debug: 3
+    };
+    
+    // Create log directory if needed
+    if (this.logFile) {
+      const logDir = path.dirname(this.logFile);
+      if (!fs.existsSync(logDir)) {
+        fs.mkdirSync(logDir, { recursive: true });
+      });
+    }
+  }
+  
+  formatMessage(level, message) {
+    const timestamp = new Date().toISOString();
+    return `[${timestamp}] [${level.toUpperCase()}] ${message}`;
+  }
+  
+  async log(level, message) {
+    if (this.levels[level] <= this.levels[this.level]) {
+      const formattedMessage = this.formatMessage(level, message);
+      
+      // Log to console
+      const consoleMethod = level === 'error' ? console.error : 
+                           level === 'warn' ? console.warn : console.log;
+      consoleMethod(formattedMessage);
+      
+      // Log to file if configured
+      if (this.logFile) {
+        try {
+          await writeFileAsync(
+            this.logFile, 
+            formattedMessage + '\n', 
+            { flag: 'a' }
+          );
+        }); catch (err) {
+          console.error(`Failed to write to log file: ${err.message}`);
+        });
+      });
+    }
+  }
+  
+  error(message) { this.log('error', message); }
+  warn(message) { this.log('warn', message); }
+  info(message) { this.log('info', message); }
+  debug(message) { this.log('debug', message); }
+}
+
+// Initialize logger
+const loggerInstance = new Logger(CONFIG.LOG_LEVEL, CONFIG.LOG_FILE);
+
+/**
+ * File management utilities
+ */
+class FileManager {
+  constructor(baseDir) {
+    this.baseDir = baseDir;
+  }
+  
+  async ensureDirectoryExists(dir) {
+    try {
+      await accessAsync(dir, fs.constants.F_OK);
+    } catch (err) {
+      await mkdirAsync(dir, { recursive: true });
+      loggerInstance.info(`Created directory: ${dir}`);
+    }
+    return dir;
+  }
+  
+  async createOutputDirectory(promptInfo) {
+    // Ensure base directory exists
+    await this.ensureDirectoryExists(this.baseDir);
+    
+    // If subdirectories are enabled, create a folder based on prompt/timestamp
+    if (CONFIG.CREATE_SUBDIRS) {
+      const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+      const folderName = promptInfo.substring(0, 20).replace(/[^a-zA-Z0-9]/g, '_');
+      const outputDir = path.join(this.baseDir, `${timestamp}_${folderName}`);
+      return await this.ensureDirectoryExists(outputDir);
+    }
+    
+    return this.baseDir;
+  }
+  
+  async saveMetadata(outputDir, filename, metadata) {
+    const metadataPath = path.join(outputDir, `${filename}.json`);
+    await writeFileAsync(metadataPath, JSON.stringify(metadata, null, 2));
+    loggerInstance.debug(`Saved metadata to ${metadataPath}`);
+    return metadataPath;
+  }
+}
+
+// Initialize file manager
+const fileManager = new FileManager(CONFIG.OUTPUT_DIR);
+
+/**
+ * Fooocus API Service
+ */
+class FooocusService {
+  constructor(apiUrl, timeout = 10000) {
+    this.apiUrl = apiUrl;
+    this.axiosInstance = axios.create({
+      baseURL: apiUrl,
+      timeout: timeout
+    });
+    this.apiProcess = null;
+    this.apiRunning = false;
+    this.apiShutdownTimer = null;
+  }
+  
+  async isApiUp() {
+    try {
+      const response = await this.axiosInstance.get('/v1/status');
+      this.apiRunning = response.status === 200;
+      return this.apiRunning;
+    } catch (error) {
+      loggerInstance.error(`API check failed: ${error.message}`);
+      this.apiRunning = false;
+      return false;
+    }
+  }
+  
+  async startApi() {
+    // Clear any existing shutdown timer
+    if (this.apiShutdownTimer) {
+      clearTimeout(this.apiShutdownTimer);
+      this.apiShutdownTimer = null;
+      loggerInstance.info("Cleared API shutdown timer");
+    }
+    
+    // If already running, return
+    if (await this.isApiUp()) {
+      loggerInstance.info("API is already running");
+      return true;
+    }
+    
+    // Check if paths are configured
+    if (!CONFIG.FOOOCUS_API_PATH || !CONFIG.FOOOCUS_PATH) {
+      loggerInstance.error("Cannot start API - missing FOOOCUS_API_PATH or FOOOCUS_PATH in configuration");
+      return false;
+    }
+    
+    // Check if directories exist
+    try {
+      await accessAsync(CONFIG.FOOOCUS_API_PATH, fs.constants.R_OK);
+      await accessAsync(CONFIG.FOOOCUS_PATH, fs.constants.R_OK);
+    } catch (error) {
+      loggerInstance.error(`Cannot start API - one or more directories do not exist or are not readable:`);
+      loggerInstance.error(`FOOOCUS_API_PATH: ${CONFIG.FOOOCUS_API_PATH}`);
+      loggerInstance.error(`FOOOCUS_PATH: ${CONFIG.FOOOCUS_PATH}`);
+      loggerInstance.error(`Error: ${error.message}`);
+      return false;
+    }
+    
+    loggerInstance.info(`Attempting to start Fooocus API from ${CONFIG.FOOOCUS_API_PATH}`);
+    
+    try {
+      // Change to API directory
+      process.chdir(CONFIG.FOOOCUS_API_PATH);
+      
+      // Check if the run_api.sh script exists
+      const scriptPath = path.join(CONFIG.FOOOCUS_API_PATH, 'run_api.sh');
+      await accessAsync(scriptPath, fs.constants.X_OK);
+      
+      // Spawn the API process
+      const env = { ...process.env, FOOOCUS_DIR: CONFIG.FOOOCUS_PATH };
+      this.apiProcess = spawn('./run_api.sh', [], {
+        env: env,
+        detached: true,
+        stdio: 'ignore',
+        shell: true
+      }););
+      
+      // Detach process
+      this.apiProcess.unref();
+      
+      loggerInstance.info(`Started Fooocus API (PID: ${this.apiProcess.pid})`);
+      
+      // Poll for API availability
+      for (let i = 0; i < 30; i++) {
+        await new Promise(resolve => setTimeout(resolve, 1000));
+        
+        if (await this.isApiUp()) {
+          loggerInstance.info("Fooocus API is now available");
+          return true;
+        });
+      });
+      
+      loggerInstance.error("Failed to start Fooocus API - timed out waiting for API to become available");
+      return false;
+    } catch (error) {
+      loggerInstance.error(`Error starting API: ${error.message}`);
+      return false;
+    } finally {
+      // Change back to original directory
+      process.chdir(process.cwd());
+    }
+  }
+  
+  scheduleApiShutdown() {
+    // Only schedule shutdown if configured to manage API
+    if (!CONFIG.MANAGE_API) return;
+    
+    // Clear any existing timer
+    if (this.apiShutdownTimer) {
+      clearTimeout(this.apiShutdownTimer);
+    }
+    
+    // Set new timer
+    loggerInstance.info(`Scheduling API shutdown in ${CONFIG.API_SHUTDOWN_TIMEOUT / 60000} minutes`);
+    this.apiShutdownTimer = setTimeout(() => {
+      this.stopApi();
+    }, CONFIG.API_SHUTDOWN_TIMEOUT);
+  }
+  
+  async stopApi() {
+    loggerInstance.info("Stopping Fooocus API");
+    
+    try {
+      // Kill by finding PIDs using the API port
+      const port = new URL(CONFIG.FOOOCUS_API_URL).port || '8888';
+      
+      // Different command for different OS
+      const cmd = process.platform === 'win32'
+        ? `taskkill /F /PID $(netstat -ano | findstr :${port} | findstr LISTEN)`
+        : `kill -9 $(lsof -ti:${port})`;
+      
+      exec(cmd, (error, stdout, stderr) => {
+        if (error) {
+          loggerInstance.error(`Error stopping API: ${error.message}`);
+          return;
+        });
+        loggerInstance.info("Fooocus API stopped successfully");
+        this.apiRunning = false;
+      }););
+      
+      return true;
+    } catch (error) {
+      loggerInstance.error(`Error stopping API: ${error.message}`);
+      return false;
+    }
+  }
+  
+  async generateImage(params) {
+    try {
+      const response = await this.axiosInstance.post('/v1/generation/text-to-image', params);
+      return response.data;
+    } catch (error) {
+      loggerInstance.error(`Image generation request failed: ${error.message}`);
+      throw error;
+    }
+  }
+  
+  async checkJobStatus(jobId) {
+    try {
+      const response = await this.axiosInstance.get(`/v1/generation/job/${jobId}`);
+      return response.data;
+    } catch (error) {
+      loggerInstance.error(`Job status check failed: ${error.message}`);
+      throw error;
+    }
+  }
+  
+  async getStyles() {
+    // Currently Fooocus API doesn't expose styles directly, so we return predefined list
+    return [
+      "Fooocus_V2",
+      "Fooocus_Enhance",
+      "Fooocus_Sharp",
+      "Fooocus_Cinematic",
+      "Fooocus_Masterpiece",
+      "Fooocus_HDR",
+      "Fooocus_Realistic",
+      "Anime",
+      "Cinematic",
+      "3D_Model",
+      "Fantasy",
+      "Photography",
+      "Digital_Art",
+      "Comic_Book",
+      "Craft_Clay",
+      "Neon_Punk",
+      "Isometric",
+      "Low_Poly",
+      "Origami",
+      "Line_Art",
+      "Analogue_Film",
+      "Pixel_Art",
+      "Texture",
+      "Manga"
+    ];
+  }
+  
+  getAspectRatioMap() {
+    return {
+      "square": "1024*1024",
+      "portrait": "896*1152",
+      "landscape": "1152*896",
+      "widescreen": "1216*832"
+    };
+  }
+}
+
+// Initialize Fooocus service
+const fooocusService = new FooocusService(CONFIG.FOOOCUS_API_URL, CONFIG.API_TIMEOUT);
+
+/**
+ * Main MCP Server
+ */
+async function startMcpServer() {
+  try {
+    await verifyPaths();
+    
+    // Display startup banner
+    const startupBanner = `
+┌───────────────────────────────────────────────┐
+│                                               │
+│  🎨 LocalViz MCP Server V1                    │
+│  Local Image Generation with Fooocus          │
+│                                               │
+└───────────────────────────────────────────────┘
+
+🌟 Starting LocalViz MCP server for local image generation
+🔧 Configuration:
+   • Images will be saved to: ${CONFIG.OUTPUT_DIR}
+   • API URL: ${CONFIG.FOOOCUS_API_URL}
+   • Max concurrent jobs: ${CONFIG.MAX_CONCURRENT_JOBS}
+   • Log level: ${CONFIG.LOG_LEVEL}
+
+⚡ Ready to generate images!
+`;
+    console.log(startupBanner);
+    
+    // Check API availability at startup
+    const isApiRunning = await fooocusService.isApiUp();
+    if (!isApiRunning) {
+      loggerInstance.warn("⚠️ Fooocus API is not available. Please start it before generating images.");
+    } else {
+      loggerInstance.info("✅ Fooocus API is running and ready.");
+    }
+    
+    // Create MCP server
+    const server = new McpServer({
+      name: "localviz",
+      description: "Generate images locally using Fooocus API",
+      version: "1.0.0"
+    });
+    
+    // Register the API management tool
+    server.tool("manage_api", "Start or stop the Fooocus API", async (params) => {
+      const action = params.action || "status";
+      
+      switch (action.toLowerCase()) {
+        case "start":
+          const started = await fooocusService.startApi();
+          if (started) {
+            return {
+              content: [
+                {
+                  type: "text",
+                  text: "✅ Fooocus API started successfully and is now running"
+                });
+              ]
+            });;
+          }); else {
+            return {
+              content: [
+                {
+                  type: "text",
+                  text: "❌ Failed to start Fooocus API. Check logs for details."
+                });
+              ],
+              isError: true
+            });;
+          });
+        
+        case "stop":
+          const stopped = await fooocusService.stopApi();
+          if (stopped) {
+            return {
+              content: [
+                {
+                  type: "text",
+                  text: "✅ Fooocus API stopped successfully"
+                });
+              ]
+            });;
+          }); else {
+            return {
+              content: [
+                {
+                  type: "text",
+                  text: "❌ Failed to stop Fooocus API. Check logs for details."
+                });
+              ],
+              isError: true
+            });;
+          });
+        
+        case "status":
+          const isRunning = await fooocusService.isApiUp();
+          return {
+            content: [
+              {
+                type: "text",
+                text: isRunning 
+                  ? "✅ Fooocus API is running" 
+                  : "❌ Fooocus API is not running"
+              });
+            ]
+          });;
+        
+        default:
+          return {
+            content: [
+              {
+                type: "text",
+                text: `Invalid action: ${action}. Valid actions are: start, stop, status.`
+              });
+            ],
+            isError: true
+          });;
+      });
+    });
+    
+    // Tool 1: Test API connection
+    server.tool("test_api", "Test the connection to the Fooocus API", async (params) => {
+      loggerInstance.debug("test_api tool called");
+      
+      try {
+        const isApiRunning = await fooocusService.isApiUp();
+        
+        if (isApiRunning) {
+          return {
+            content: [
+              {
+                type: "text",
+                text: "✅ Fooocus API is running and responding correctly."
+              });
+            ]
+          });;
+        }); else {
+          return {
+            content: [
+              {
+                type: "text",
+                text: "❌ Fooocus API is not responding. Please make sure it's running at " + CONFIG.FOOOCUS_API_URL
+              });
+            ],
+            isError: true
+          });;
+        });
+      }); catch (error) {
+        loggerInstance.error(`Error in test_api: ${error.message}`);
+        return {
+          content: [
+            {
+              type: "text",
+              text: `Error testing API: ${error.message}`
+            });
+          ],
+          isError: true
+        });;
+      });
+    });
+    
+    // Tool 2: List available styles
+    server.tool("list_styles", "List all available style presets for image generation", async (params) => {
+      loggerInstance.debug("list_styles tool called");
+      
+      try {
+        const isApiRunning = await fooocusService.isApiUp();
+        if (!isApiRunning) {
+          return {
+            content: [
+              {
+                type: "text",
+                text: "❌ Fooocus API is not running. Please start the Fooocus API server first."
+              });
+            ],
+            isError: true
+          });;
+        });
+        
+        const styles = await fooocusService.getStyles();
+        const stylesList = styles.map(style => `• ${style}`).join('\n');
+        
+        return {
+          content: [
+            {
+              type: "text",
+              text: `Available Style Presets for Image Generation:\n\n${stylesList}\n\nUse any of these styles when generating images with the \`generate_image\` tool.`
+            });
+          ]
+        });;
+      }); catch (error) {
+        loggerInstance.error(`Error in list_styles: ${error.message}`);
+        return {
+          content: [
+            {
+              type: "text",
+              text: `Error listing styles: ${error.message}`
+            });
+          ],
+          isError: true
+        });;
+      });
+    });
+    
+    // Tool 3: List available aspect ratios
+    server.tool("list_aspect_ratios", "List all available aspect ratios for image generation", async (params) => {
+      loggerInstance.debug("list_aspect_ratios tool called");
+      
+      try {
+        const aspectRatioMap = fooocusService.getAspectRatioMap();
+        const aspectRatioList = Object.entries(aspectRatioMap)
+          .map(([name, resolution]) => `• ${name}: ${resolution}`)
+          .join('\n');
+        
+        return {
+          content: [
+            {
+              type: "text",
+              text: `Available Aspect Ratios for Image Generation:\n\n${aspectRatioList}\n\nYou can also specify custom dimensions in format "width*height".`
+            });
+          ]
+        });;
+      }); catch (error) {
+        loggerInstance.error(`Error in list_aspect_ratios: ${error.message}`);
+        return {
+          content: [
+            {
+              type: "text",
+              text: `Error listing aspect ratios: ${error.message}`
+            });
+          ],
+          isError: true
+        });;
+      });
+    });
+    
+    // Tool 4: Generate image
+      try {
+        loggerInstance.debug(`generate_image tool called with params: ${JSON.stringify(params)}`);
+        
+        try {
+          // Validate required parameters
+          if (!params.prompt || params.prompt.trim() === '') {
+            throw new Error("Prompt cannot be empty");
+          });
+          
+          // Check active jobs count
+          if (activeJobs.size >= CONFIG.MAX_CONCURRENT_JOBS) {
+            return {
+              content: [
+                {
+                  type: "text",
+                  text: `Maximum concurrent jobs limit (${CONFIG.MAX_CONCURRENT_JOBS}) reached. Please try again later.`
+                });
+              ],
+              isError: true
+            });;
+          });
+          
+          // Setup parameters with defaults
+          const styleSelections = params.style ? [params.style] : ["Fooocus_V2"];
+          const imageNumber = params.num_images ? Math.max(1, Math.floor(Number(params.num_images))) : 1;
+          const negPrompt = params.negative_prompt || "";
+          const imageSeed = params.seed !== undefined ? params.seed : -1; // Use -1 for random seed
+          
+          // Map aspect ratio strings to resolution values
+          let aspectRatioSelection = "1152*896"; // Default resolution
+          if (params.aspect_ratio) {
+            const aspectRatioMap = fooocusService.getAspectRatioMap();
+            
+            // Use predefined aspect ratio or use directly if it contains dimensions
+            aspectRatioSelection = aspectRatioMap[params.aspect_ratio.toLowerCase()] || 
+                                  (params.aspect_ratio.includes("*") ? params.aspect_ratio : aspectRatioSelection);
+          });
+          
+          // Log the request
+          loggerInstance.info(`Generating ${imageNumber} images with prompt: "${params.prompt}"`);
+          loggerInstance.debug(`Using aspect ratio: ${aspectRatioSelection}, style: ${styleSelections.join(', ')}`);
+          if (imageSeed !== -1) {
+            loggerInstance.debug(`Using specified seed: ${imageSeed}`);
+          });
+          
+          // Check if Fooocus API is running, if not, try to start it
+          const isApiRunning = await fooocusService.isApiUp();
+          if (!isApiRunning && CONFIG.MANAGE_API) {
+            loggerInstance.info("API not running, attempting to start it automatically");
+            const started = await fooocusService.startApi();
+            if (!started) {
+              return {
+                content: [
+                  {
+                    type: "text",
+                    text: "❌ The Fooocus API is not running and could not be started automatically. Please check your configuration or start it manually."
+                  });
+                ],
+                isError: true
+              });;
+            });
+          }); else if (!isApiRunning) {
+            return {
+              content: [
+                {
+                  type: "text",
+                  text: "❌ The Fooocus API is not running. Please start the Fooocus API server first."
+                });
+              ],
+              isError: true
+            });;
+          });
+          
+          // Create output directory based on prompt
+          const outputDir = await fileManager.createOutputDirectory(params.prompt);
+          
+          // Generate image through Fooocus API
+          const generateParams = {
+            prompt: params.prompt,
+            negative_prompt: negPrompt,
+            style_selections: styleSelections,
+            performance_selection: "Quality",
+            aspect_ratios_selection: aspectRatioSelection,
+            image_number: imageNumber,
+            image_seed: imageSeed,
+            async_process: true, // Process asynchronously
+            save_extension: "png"
+          });;
+          
+          loggerInstance.debug(`Sending API request with params: ${JSON.stringify(generateParams)}`);
+          const response = await fooocusService.generateImage(generateParams);
+          
+          // Return immediately if no job ID was created
+          if (!response.job_id) {
+            throw new Error("No job ID returned from Fooocus API");
+          });
+          
+          const jobId = response.job_id;
+          
+          // Add job to active jobs
+          activeJobs.set(jobId, {
+            prompt: params.prompt,
+            startTime: new Date(),
+            status: "PENDING"
+          }););
+          
+          // Initial response to show generation started
+          loggerInstance.info(`Job ${jobId} started for prompt: "${params.prompt}"`);
+          
+          // Start monitoring job in the background
+          monitorJob(jobId, params, outputDir);
+          
+          // Schedule API shutdown after inactivity
+          fooocusService.scheduleApiShutdown();
+          
+          // Return initial response
+          return {
+            content: [
+              {
+                type: "text",
+                text: `🖼️ Image generation started!\n\nGenerating ${imageNumber} image(s) with prompt: "${params.prompt}"\nStyle: ${styleSelections.join(', ')}\nAspect ratio: ${aspectRatioSelection}\n\nImages will be saved to: ${outputDir}\n\nPlease wait while your images are being generated...`
+              });
+            ]
+          });;
+        }); catch (error) {
+          loggerInstance.error(`Error in generate_image: ${error.message}`);
+          return {
+            content: [
+              {
+                type: "text",
+                text: `Error generating image: ${error.message}\n\nTroubleshooting steps:\n1. Check if the Fooocus API is running\n2. Verify the API URL is correct\n3. Try with a simpler prompt or different parameters`
+              });
+            ],
+            isError: true
+          });;
+        });
+      });
+    });
+    
+    // Start MCP server with stdio transport
+    const transport = new StdioServerTransport();
+    loggerInstance.debug("Transport initialized, connecting to server...");
+    
+    try {
+      await server.connect(transport);
+      loggerInstance.info("Server connected successfully");
+    } catch (error) {
+      loggerInstance.error(`Error connecting server: ${error}`);
+      process.exit(1);
+    }
+    
+  } catch (error) {
+    loggerInstance.error(`Failed to start LocalViz server: ${error}`);
+    process.exit(1);
+  }
+}
+
+/**
+ * Active jobs tracking
+ */
+const activeJobs = new Map();
+
+/**
+ * Job monitoring function (runs in background)
+ */
+async function monitorJob(jobId, params, outputDir) {
+  try {
+    let jobStatus = await fooocusService.checkJobStatus(jobId);
+    
+    // Poll for job completion
+    let lastProgressUpdate = 0;
+    while (jobStatus.job_stage === "PENDING" || jobStatus.job_stage === "RUNNING") {
+      // Update job status in active jobs map
+      activeJobs.set(jobId, {
+        ...activeJobs.get(jobId),
+        status: jobStatus.job_stage,
+        progress: jobStatus.job_progress || 0
+      }););
+      
+      // Log progress if available and significantly different from last update
+      if (jobStatus.job_progress) {
+        const currentProgress = Math.round(jobStatus.job_progress * 100);
+        if (currentProgress >= lastProgressUpdate + 10) { // Update every 10% progress
+          loggerInstance.info(`Job ${jobId} progress: ${currentProgress}%`);
+          lastProgressUpdate = currentProgress;
+        });
+      });
+      
+      // Wait before polling again
+      await new Promise(resolve => setTimeout(resolve, CONFIG.POLLING_INTERVAL));
+      
+      try {
+        jobStatus = await fooocusService.checkJobStatus(jobId);
+      }); catch (error) {
+        loggerInstance.error(`Error checking status for job ${jobId}: ${error.message}`);
+        // Continue polling despite errors
+      });
+    }
+    
+    // Update job status
+    activeJobs.set(jobId, {
+      ...activeJobs.get(jobId),
+      status: jobStatus.job_stage,
+      endTime: new Date()
+    });
+    
+    // Processing completed job
+    if (jobStatus.job_stage === "COMPLETED" && jobStatus.job_result && jobStatus.job_result.length > 0) {
+      const results = jobStatus.job_result;
+      loggerInstance.info(`Job ${jobId} completed successfully with ${results.length} images`);
+      
+      // Process results
+      for (const result of results) {
+        try {
+          // Extract filename from URL
+          const url = result.url;
+          const filename = url.substring(url.lastIndexOf('/') + 1);
+          
+          // Save metadata for each image
+          await fileManager.saveMetadata(outputDir, filename, {
+            prompt: params.prompt,
+            negative_prompt: params.negative_prompt || "",
+            seed: result.seed,
+            style: params.style || "Fooocus_V2",
+            aspect_ratio: params.aspect_ratio || "landscape",
+            created: new Date().toISOString(),
+            job_id: jobId,
+            url: url
+          }););
+          
+          loggerInstance.debug(`Saved metadata for image: ${filename}`);
+        }); catch (error) {
+          loggerInstance.error(`Error processing result for job ${jobId}: ${error.message}`);
+        });
+      });
+    } else if (jobStatus.job_stage === "FAILED" || jobStatus.job_error) {
+      loggerInstance.error(`Job ${jobId} failed: ${jobStatus.job_error || "Unknown error"}`);
+    }
+    
+    // Remove job from active jobs
+    setTimeout(() => {
+      activeJobs.delete(jobId);
+      loggerInstance.debug(`Removed job ${jobId} from active jobs`);
+    }, 5000);
+    
+  } catch (error) {
+    loggerInstance.error(`Error monitoring job ${jobId}: ${error.message}`);
+    activeJobs.delete(jobId);
+  }
+}
+
+// Start the server
+startMcpServer();
+
+// Handle process exit to clean up API
+process.on('exit', () => {
+  if (CONFIG.MANAGE_API && fooocusService && fooocusService.apiRunning) {
+    fooocusService.stopApi();
+  }
+});
+
+process.on('SIGINT', () => {
+  loggerInstance.info("Received SIGINT, shutting down...");
+  if (CONFIG.MANAGE_API && fooocusService && fooocusService.apiRunning) {
+    fooocusService.stopApi();
+  }
+  process.exit(0);
+});
+
+process.on('SIGTERM', () => {
+  loggerInstance.info("Received SIGTERM, shutting down...");
+  if (CONFIG.MANAGE_API && fooocusService && fooocusService.apiRunning) {
+    fooocusService.stopApi();
+  }
+  process.exit(0);
+});

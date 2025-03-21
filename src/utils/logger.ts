@@ -1,5 +1,6 @@
-import fs from 'fs';
-import path from 'path';
+import * as fsSync from 'fs';
+import * as fs from 'fs/promises';
+import * as path from 'path';
 import { fileURLToPath } from 'url';
 
 // Get the current __filename and __dirname equivalent in ESM
@@ -22,8 +23,14 @@ const numericLogLevel = logLevels[currentLogLevel] || 1;
 
 // Create logs directory if it doesn't exist
 const logsDir = path.join(projectRoot, 'logs');
-if (!fs.existsSync(logsDir)) {
-  fs.mkdirSync(logsDir, { recursive: true });
+
+// Create logs directory and log file - run synchronously during initialization
+try {
+  if (!fsSync.existsSync(logsDir)) {
+    fsSync.mkdirSync(logsDir, { recursive: true });
+  }
+} catch (error) {
+  console.error("Error creating logs directory:", error);
 }
 
 // Create log file with timestamp
@@ -37,8 +44,12 @@ function formatMessage(level: LogLevel, message: string): string {
 }
 
 // Write message to log file
-function writeToLogFile(message: string): void {
-  fs.appendFileSync(logFile, message + '\n');
+async function writeToLogFile(message: string): Promise<void> {
+  try {
+    await fs.appendFile(logFile, message + '\n');
+  } catch (error) {
+    console.error("Error writing to log file:", error);
+  }
 }
 
 // Logger object

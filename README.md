@@ -197,48 +197,113 @@ The MCP server provides the following tools:
    - Parameters:
      - `prompt`: Text description of the desired image
      - `negative_prompt`: What to avoid in the image
-     - `style`: Style preset to use for generation (e.g., 'Fooocus V2', 'Cinematic')
+     - `style`: Style preset to use for generation (e.g., 'Fooocus_V2', 'Cinematic')
      - `num_images`: Number of images to generate
      - `seed`: Specific seed for reproducible generation (use -1 for random)
      - `aspect_ratio`: Aspect ratio for generated images (e.g., 'square', 'portrait', 'landscape', or specific dimensions like '1024*1024')
 
-2. `browse_images`: Browse and list recently generated images
-   - Parameters:
-     - `limit`: Maximum number of images to return (default: 10)
-     - `sort_by`: Sort order ('newest' or 'oldest')
-     - `open_folder`: Whether to open the output folder in your file explorer (default: true)
+2. `list_styles`: List all available style presets for image generation
 
-3. `generate_variation`: Create variations of existing images
-   - Parameters:
-     - `image_index`: Index of the image to use as reference (from browse_images)
-     - `prompt`: New prompt to modify the image (optional, will use original if not provided)
-     - `negative_prompt`: Elements to avoid in the generated image
-     - `num_images`: Number of variations to generate
-     - `seed`: Specific seed for reproducible generation
-     - `aspect_ratio`: Aspect ratio for generated images
+3. `list_aspect_ratios`: List all available aspect ratios for image generation
+   
+4. `test_api`: Test the connection to the Fooocus API
 
-4. `list_styles`: List all available style presets
+## V1 Server (New)
 
-5. `manage_fooocus_server`: Manage the Fooocus API server
-   - Parameters:
-     - `action`: "start" or "stop"
+The LocalViz MCP now includes a V1 server implementation with enhanced features:
 
-6. `server_status`: Get information about the LocalViz MCP server
-   - Provides statistics, configuration, and runtime information
-   - No parameters required
+### V1 Features
+
+- Improved error handling with detailed error messages
+- Progress tracking for image generation
+- Job queue management with concurrent job limits
+- Better logging with configurable log levels
+- Configurable output directory with optional subdirectory creation
+- Simplified API integration
+- Detailed documentation
+- **Automatic Fooocus API management** - starts and stops the API as needed
+
+### Using the V1 Server
+
+To use the V1 server, update your MCP configuration to point to the server-v1.js script:
+
+```json
+{
+  "localviz": {
+    "command": "node",
+    "args": [
+      "/path/to/your/localviz-mcp/server-v1.js"
+    ],
+    "transport": "stdio"
+  }
+}
+```
+
+### Configuration
+
+The V1 server supports the following configuration options via environment variables:
+
+```
+# API settings
+FOOOCUS_API_URL=http://127.0.0.1:8888
+API_TIMEOUT=10000
+POLLING_INTERVAL=2000
+
+# Output settings
+OUTPUT_DIR=/path/to/your/output/directory
+CREATE_SUBDIRS=true
+
+# Processing settings
+MAX_CONCURRENT_JOBS=3
+
+# Logging
+LOG_LEVEL=info
+LOG_FILE=localviz.log
+
+# API Management Settings
+MANAGE_API=true            # Whether to automatically manage Fooocus API
+API_SHUTDOWN_TIMEOUT=300000 # Shutdown API after 5 minutes of inactivity
+
+# Fooocus API Paths
+FOOOCUS_API_PATH=/path/to/your/Fooocus-API
+FOOOCUS_PATH=/path/to/your/Fooocus
+```
+
+### API Management
+
+The V1 server can automatically manage the Fooocus API lifecycle:
+
+1. **Automatic startup**: The server will start the Fooocus API when needed for image generation
+2. **Intelligent shutdown**: The API will be shut down after a configurable period of inactivity
+3. **Graceful termination**: The server will ensure the API is properly shut down when the server exits
+
+You can also manually control the API using the `manage_api` tool with the following actions:
+- `start`: Start the Fooocus API
+- `stop`: Stop the Fooocus API
+- `status`: Check if the API is running
+
+### Troubleshooting
+
+If you encounter issues with the V1 server:
+
+1. Check if the Fooocus API is running at the configured URL
+2. Verify that the output directory exists and is writable
+3. Check the log file for detailed error messages
+4. Try with a simpler prompt or different parameters
+5. Ensure the FOOOCUS_API_PATH and FOOOCUS_PATH are correctly configured in your .env file
 
 ## Examples
 
 ### Generating a Basic Image
 
 ```
-Use LocalViz to create an image of a futuristic cityscape with flying cars in the style of cinematic photography
+Use LocalViz to create an image of a futuristic cityscape with flying cars in the style of cinematic_photography
 ```
 
 ### Generating Multiple Images with a Specific Style
 
 ```
-Use LocalViz to generate 4 images of a peaceful garden with Japanese styling using the "Watercolor" style
+Use LocalViz to generate 4 images of a peaceful garden with Japanese_styling using the "Watercolor" style
 ```
 
 ### Using Negative Prompts
@@ -262,7 +327,7 @@ Use LocalViz to create an image of a tropical beach at sunset with seed 42
 ### Combining Multiple Parameters
 
 ```
-Use LocalViz to generate 2 square images of a fantasy dragon with colorful scales, style Oil Painting, negative prompt: blurry, low quality
+Use LocalViz to generate 2 square images of a fantasy dragon with colorful scales, style Oil_Painting, negative prompt: blurry, low quality
 ```
 
 ### Browsing Recently Generated Images
@@ -287,6 +352,14 @@ Use LocalViz to browse the 5 oldest generated images
 
 ```
 Use LocalViz to show server status
+```
+
+## Usage Example
+```yml
+generate_image:
+  prompt: "A cartoon_style image of Donald Duck rapping on top of a mountain, microphone in hand, snow-capped peaks in the background, dramatic lighting"
+  style: "Fooocus_V2"
+  aspect_ratio: "landscape"
 ```
 
 ## Troubleshooting
