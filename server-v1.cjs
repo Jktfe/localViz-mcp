@@ -4,10 +4,6 @@
  * Provides local image generation capabilities using Fooocus API
  */
 
-// Override type to CommonJS for this file
-require = createRequire(import.meta.url);
-import { createRequire } from 'module';
-
 const { McpServer } = require('./node_modules/@modelcontextprotocol/sdk/dist/cjs/server/mcp.js');
 const { StdioServerTransport } = require('./node_modules/@modelcontextprotocol/sdk/dist/cjs/server/stdio.js');
 const axios = require('axios');
@@ -509,51 +505,26 @@ class JobManager {
         await new Promise(r => setTimeout(r, CONFIG.POLLING_INTERVAL));
         
         try {
-          // Use the query-job endpoint instead, which is more reliable
           const progressResponse = await axios.get(
-            `${CONFIG.FOOOCUS_API_URL}/v1/generation/query-job`,
-            { params: { job_id: task_id } }
+            `${CONFIG.FOOOCUS_API_URL}/v1/generation/task/${task_id}`
           );
           
-          const { job_stage, job_progress, job_result } = progressResponse.data;
+          const { status, progress, done } = progressResponse.data;
           
           // Update job progress
-          if (job_progress !== undefined) {
-            job.progress = Math.max(job.progress, Math.round(job_progress * 100));
-          }
+          job.progress = Math.max(job.progress, Math.round(progress * 100));
           
-          if (job_stage === "SUCCESS" || job_stage === "COMPLETED") {
+          if (done) {
             // Job is complete
             completed = true;
             job.progress = 100;
             
-            // Extract job results directly from the query-job response
-            // No need for a separate result endpoint call
-            const imgs = [];
-            let metadata = { seed: -1 };
+            // Get the job result
+            const resultResponse = await axios.get(
+              `${CONFIG.FOOOCUS_API_URL}/v1/generation/result/${task_id}`
+            );
             
-            if (job_result && job_result.length > 0) {
-              // For each result, fetch the image data
-              for (const result of job_result) {
-                try {
-                  // Get the image data by URL
-                  const imageResponse = await axios.get(result.url, {
-                    responseType: 'arraybuffer'
-                  });
-                  
-                  // Convert to base64 for saving
-                  const base64Data = Buffer.from(imageResponse.data).toString('base64');
-                  imgs.push(base64Data);
-                  
-                  // Extract seed from the result
-                  if (result.seed) {
-                    metadata.seed = result.seed;
-                  }
-                } catch (imgError) {
-                  logger.error(`Failed to fetch image from ${result.url}: ${imgError.message}`);
-                }
-              }
-            }
+            const { imgs, metadata } = resultResponse.data;
             
             if (!imgs || imgs.length === 0) {
               throw new Error("No images generated");

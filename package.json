@@ -3,9 +3,10 @@
   "version": "1.0.0",
   "description": "MCP server for local image generation using Fooocus",
   "main": "server.js",
+  "type": "module",
   "scripts": {
     "build": "tsc",
-    "start": "node server.cjs",
+    "start": "node dist/server.js",
     "dev": "ts-node src/server.ts"
   },
   "keywords": [

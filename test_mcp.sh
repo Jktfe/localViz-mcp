@@ -9,7 +9,7 @@ echo "Building the LocalViz MCP server..."
 npm run build || { echo "Build failed. Check for errors and try again."; exit 1; }
 
 # Check if server is already running on the same port
-if pgrep -f "node dist/server.js" > /dev/null; then
+if pgrep -f "node server-v1.cjs" > /dev/null; then
   echo "Warning: MCP server is already running. This test will start another instance."
   echo "You may want to stop the existing instance first."
   read -p "Continue anyway? (y/n) " -n 1 -r
@@ -23,8 +23,8 @@ fi
 # Create log file
 echo "Starting MCP server in test mode..." > server.log
 
-# Start the server in the background
-node dist/server.js >> server.log 2>&1 &
+# Start the server in the background using the correct wrapper
+node server-v1.cjs >> server.log 2>&1 &
 SERVER_PID=$!
 
 if [ -z "$SERVER_PID" ]; then
@@ -78,7 +78,7 @@ echo "Setting test timeout to $TIMEOUT seconds"
     process.on('SIGINT', () => {
       process.exit(0);
     });
-    \" | node dist/server.js"
+    \" | node server-v1.cjs"
     TEST_EXIT_CODE=$?
   else
     # Fallback if timeout command is not available
@@ -88,7 +88,7 @@ echo "Setting test timeout to $TIMEOUT seconds"
     process.on('SIGINT', () => {
       process.exit(0);
     });
-    " | node dist/server.js
+    " | node server-v1.cjs
     TEST_EXIT_CODE=$?
   fi
 

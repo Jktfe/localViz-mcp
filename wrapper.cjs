@@ -1,5 +1,8 @@
 // CommonJS wrapper to load the MCP SDK
-const { Server, StdioServerTransport } = require('@modelcontextprotocol/sdk');
+const mcp = require('./node_modules/@modelcontextprotocol/sdk/dist/cjs/server/mcp.js');
+const stdio = require('./node_modules/@modelcontextprotocol/sdk/dist/cjs/server/stdio.js');
+const Server = mcp.McpServer;
+const StdioServerTransport = stdio.StdioServerTransport;
 const { spawn } = require('child_process');
 const path = require('path');
 

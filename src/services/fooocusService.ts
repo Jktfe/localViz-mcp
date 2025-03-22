@@ -42,7 +42,8 @@ class FooocusService {
    */
   async isApiUp(): Promise<boolean> {
     try {
-      const response = await axios.get(`${FOOOCUS_API_URL}/v1/status`, { timeout: 2000 });
+      // Use ping endpoint instead of status which doesn't exist
+      const response = await axios.get(`${FOOOCUS_API_URL}/ping`, { timeout: 2000 });
       return response.status === 200;
     } catch (error) {
       return false;
